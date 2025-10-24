@@ -1,18 +1,8 @@
 --[[
-    Project: JJS Auto-Defense Core (v2.0)
-    Purpose: Modular, high-performance, and stealth-oriented auto-defense
-             utility for Jujutsu Shenanigans.
-    
-    Structure:
-    - JJS_Core: Main table, encapsulates all logic.
-    - JJS_Core.GameData: [CONFIGURATION] All game-specific paths and IDs.
-    - JJS_Core.Config: Live state of all toggles from the UI.
-    - JJS_Core.Stealth: Functions for anti-detection and humanization.
-    - JJS_Core.Prediction: Manages player state and velocity prediction.
-    - JJS_Core.BetterDetection: Manages the "BD" part-spawning logic.
-    - JJS_Core.Visuals: Manages all visual components (ESP, trackers).
-    - JJS_Core.Hooks: Manages game event connections (Sound, Player).
-    - JJS_Core:Init(): Main initialization function.
+    Project: JJS Auto-Defense Core (v4.0 - VFX Hitbox Detection)
+    Purpose: Stealth-oriented, hitbox-based auto-defense for JJS.
+    Method: Detects the "Name" of attack VFX parts added to workspace.
+    Note: All Animation and Sound logic has been removed.
 --]]
 
 -- ===================================================================
@@ -20,18 +10,15 @@
 -- ===================================================================
 local Services = {
     ReplicatedStorage = game:GetService("ReplicatedStorage"),
-    TweenService = game:GetService("TweenService"),
     RunService = game:GetService("RunService"),
     Players = game:GetService("Players"),
     StarterGui = game:GetService("StarterGui"),
-    Debris = game:GetService("Debris"),
-    TextChatService = game:GetService("TextChatService"),
-    Stats = game:GetService("Stats")
+    Stats = game:GetService("Stats"),
+    Workspace = game:GetService("Workspace")
 }
 
 local LocalPlayer = Services.Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
-local CurrentCamera = workspace.CurrentCamera
 
 -- ===================================================================
 -- ===== 2. CORE MODULE INITIALIZATION
@@ -40,44 +27,33 @@ local CurrentCamera = workspace.CurrentCamera
 local JJS_Core = {}
 JJS_Core.__index = JJS_Core
 
---- Helper function to create lookup tables
-local function CreateLookupTable(arr)
-    local set = {}
-    for _, id in ipairs(arr) do
-        set[tostring(id)] = true
-    end
-    return set
-end
-
 -- ===================================================================
 -- ===== 3. [CONFIGURATION] GAME-SPECIFIC DATA
 -- ===================================================================
---[[
-    ⚠️ CRITICAL: This section MUST be filled out with data from
-    Dex Explorer for Jujutsu Shenanigans. The script will not
-    function with these placeholder values.
---]]
 JJS_Core.GameData = {
     -- [RECON] Find the correct RemoteEvent paths in ReplicatedStorage
     Remotes = {
-        Parry = "Remotes:WaitForChild('Combat'):WaitForChild('Parry')",
+        Block = "Remotes:WaitForChild('Combat'):WaitForChild('Parry')", 
         Ability = "Remotes:WaitForChild('Combat'):WaitForChild('Ability')"
     },
     
-    -- [RECON] Find the asset IDs by spying on player animators/sounds
-    AssetIDs = {
-        AttackAnims = CreateLookupTable({
-            "12345678901", -- Placeholder for Gojo's "Lapse Blue"
-            "12345678902", -- Placeholder for Sukuna's "Dismantle"
-            "12345678903"  -- ... etc
-        }),
-        AttackSounds = CreateLookupTable({
-            "22345678901", -- Placeholder for attack "swoosh"
-            "22345678902"  -- Placeholder for charge-up
-        }),
-        ParryAnims = CreateLookupTable({
-            "32345678901" -- Placeholder for the 'F' key parry anim
-        })
+    -- [RECON] These are the VFX part names from the script you found.
+    -- You can add or remove part names here.
+    VFX_Triggers = {
+        ["CombatTrail"] = true, ["LapseBlue"] = true, ["HandTrail"] = true,
+        ["Shock"] = true, ["BallFire"] = true, ["Reserve"] = true, ["Doors"] = true,
+        ["TwoFold"] = true, ["Rabbit"] = true, ["Spawn"] = true, ["DivineAttack"] = true,
+        ["Throw"] = true, ["FocusStrike"] = true, ["DrillImpact"] = true,
+        ["Barrage"] = true, ["Mucus"] = true, ["MucusFire"] = true, ["DismantleFly"] = true,
+        ["HitGlow"] = true
+    },
+    
+    -- [RECON] These are the "Danger" VFX names for the Auto-Dodge feature.
+    Dodge_Triggers = {
+        ["DomainBurst"] = true, ["Domain"] = true, ["RushWind"] = true,
+        ["HotHands"] = true, ["WorldSlash"] = true, ["RitualStart"] = true,
+        ["EyeTrails"] = true, ["DivergentFist"] = true, ["LapseBlueMax"] = true,
+        ["Purple"] = true, ["ReversalRedMax"] = true
     }
 }
 
@@ -85,48 +61,38 @@ JJS_Core.GameData = {
 -- ===== 4. SCRIPT CONFIGURATION (Live State)
 -- ===================================================================
 JJS_Core.Config = {
-    -- Auto Parry
-    AutoParryAnim = false,
-    AutoParryAudio = false,
+    -- Auto Block
+    AutoBlock = false,
+    Block_MinRange = 2.5,  -- Min distance to trigger block
+    Block_MaxRange = 14.5, -- Max distance to trigger block
+    
+    -- Auto Dodge
+    AutoDodge = false,
+    Dodge_Range = 75,   -- Distance to trigger dodge
+    Dodge_Distance = 45,  -- How far to teleport away
+    Dodge_Cooldown = 2,
+    
+    -- Auto Counter
     AutoCounter = false,
     CounterAbilitySlot = 4,
     CounterAbilityCooldown = 5,
-    LocalParryCooldown = 0.35,
-    DetectionRange = 18,
+    
+    -- Shared
+    LocalBlockCooldown = 0.35, -- Cooldown for Block/Counter
     FacingCheck = true,
     FacingDot = -0.3,
-    PingCompensation = false,
-    
-    -- Better Detection (BD)
-    BetterDetection = false,
-    BD_Instant = false,
-    BD_PartCount = 4,
-    BD_PartSizeMult = 1,
-    BD_PredictionFwd = 1,
-    BD_PredictionTurn = 1,
-    BD_DelayFirst = 0,
-    BD_DelayStagger = 0.02,
-    BD_Distance = 2.7,
     
     -- Combat
     Aimbot = false,
-    AimbotPrediction = 4,
+    Aimbot_Range = 20,
     
     -- Visuals
     PlayerESP = false,
     RangeVisual = false,
-    FacingVisual = false,
     
     -- Stealth
     MinReactionMS = 80,
-    MaxReactionMS = 150,
-    
-    -- Health
-    SayOnDamage = false,
-    MessagesOnDamage = {"", "", "", "", "", "", "", "", "", ""},
-    SayOnLowHealth = false,
-    MessageOnLowHealth = "",
-    LowHealthAmount = 30
+    MaxReactionMS = 150
 }
 
 -- ===================================================================
@@ -135,17 +101,16 @@ JJS_Core.Config = {
 JJS_Core.Cache = {
     Humanoid = nil,
     Animator = nil,
-    ParryRemote = nil,
+    RootPart = nil,
+    BlockRemote = nil,
     AbilityRemote = nil,
-    CurrentPing = 0,
-    LastLocalParryTime = 0,
+    LastLocalBlockTime = 0,
     LastAbilityTime = 0,
-    IsAlreadyLow = false,
-    PreviousHealth = 100,
-    LastDamageMessageTime = 0,
-    HealthConnection = nil,
-    SoundHooks = {},
-    SoundBlockedUntil = {}
+    LastDodgeTime = 0,
+    
+    -- These tables store the *live* VFX parts
+    Active_Triggers = {}, -- {BasePart}
+    Active_Dangers = {}   -- {BasePart}
 }
 
 -- ===================================================================
@@ -153,21 +118,15 @@ JJS_Core.Cache = {
 -- ===================================================================
 JJS_Core.Stealth = {}
 
---- Generates a random string to be used for UI names.
---- Bypasses simple `ChildAdded` anti-cheat checks.
---- @param len number Length of the string
---- @return string
 function JJS_Core.Stealth:GetRandomName(len)
     len = len or math.random(12, 24)
     local str = ""
     for i = 1, len do
-        str = str .. string.char(math.random(97, 122)) -- lowercase a-z
+        str = str .. string.char(math.random(97, 122))
     end
     return str
 end
 
---- Wrapper for task.wait() to simulate human reaction time.
---- This is a core stealth feature to avoid server-side anomaly detection.
 function JJS_Core.Stealth:Humanize()
     local C = JJS_Core.Config
     local minReact = math.min(C.MinReactionMS, C.MaxReactionMS)
@@ -177,275 +136,27 @@ function JJS_Core.Stealth:Humanize()
 end
 
 -- ===================================================================
--- ===== 7. PREDICTION MODULE (Player State Tracking)
--- ===================================================================
-JJS_Core.Prediction = {
-    state = {}, -- [player] = { prevPos, prevLook, vel, angVel }
-    
-    -- Constants
-    SMOOTHING_LERP = 0.22,
-    PRED_SECONDS_FORWARD = 0.25,
-    PRED_SECONDS_LATERAL = 0.18,
-    PRED_MAX_FORWARD = 6,
-    PRED_MAX_LATERAL = 4,
-    ANG_TURN_MULTIPLIER = 0.6
-}
-
---- Updates the predicted velocity and angular velocity for all players.
---- @param dt number Delta time from Heartbeat
-function JJS_Core.Prediction:Update(dt)
-    if dt <= 0 then return end
-    
-    local C = JJS_Core.Config
-    
-    for _, player in ipairs(Services.Players:GetPlayers()) do
-        if player == LocalPlayer then continue end
-        
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        
-        if not hrp then
-            if self.state[player] then self.state[player] = nil end
-            continue
-        end
-        
-        -- Initialize state if new
-        local st = self.state[player]
-        if not st then
-            st = { prevPos = hrp.Position, prevLook = hrp.CFrame.LookVector, vel = Vector3.new(), angVel = 0 }
-            self.state[player] = st
-        end
-        
-        -- Calculate Velocity
-        local newVel = (hrp.Position - st.prevPos) / dt
-        st.vel = st.vel:Lerp(newVel, self.SMOOTHING_LERP)
-        
-        -- Calculate Angular Velocity
-        local prevLook = st.prevLook
-        local look = hrp.CFrame.LookVector
-        local dot = math.clamp(prevLook:Dot(look), -1, 1)
-        local angle = math.acos(dot)
-        local crossY = prevLook:Cross(look).Y
-        local angSign = (crossY >= 0) and 1 or -1
-        local newAngVel = (angle / dt) * angSign
-        st.angVel = (st.angVel * (1 - self.SMOOTHING_LERP)) + (newAngVel * self.SMOOTHING_LERP)
-        
-        -- Store current for next frame
-        st.prevPos = hrp.Position
-        st.prevLook = look
-    end
-    
-    -- Cleanup state for removed players
-    for player, _ in pairs(self.state) do
-        if not (player and player.Parent) then
-            self.state[player] = nil
-        end
-    end
-end
-
---- Gets the predicted velocity for a specific player.
---- @param player Player
---- @return Vector3
-function JJS_Core.Prediction:GetVelocity(player)
-    local state = self.state[player]
-    if state then
-        return state.vel
-    end
-    return Vector3.new()
-end
-
---- Gets the predicted position of a player.
---- @param player Player Player to predict
---- @param hrp BasePart The player's HumanoidRootPart
---- @param time number How far forward to predict (in seconds)
---- @return Vector3
-function JJS_Core.Prediction:GetPredictedPosition(player, hrp, time)
-    local vel = self:GetVelocity(player)
-    local predictTime = time + (JJS_Core.Config.PingCompensation and JJS_Core.Cache.CurrentPing or 0)
-    return hrp.Position + (vel * predictTime)
-end
-
--- ===================================================================
--- ===== 8. BETTER DETECTION (BD) MODULE
--- ===================================================================
-JJS_Core.BetterDetection = {
-    partPool = {},
-    partContainer = workspace:FindFirstChild("AntiFlickContainer") or Instance.new("Folder", workspace)
-}
-JJS_Core.BetterDetection.partContainer.Name = "AntiFlickContainer"
-
---- Gets a part from the pool or creates a new one.
-function JJS_Core.BetterDetection:GetPart()
-    if #self.partPool > 0 then
-        local part = table.remove(self.partPool)
-        part.Parent = self.partContainer
-        return part
-    end
-    -- Pool empty, create new
-    local part = Instance.new("Part")
-    part.Name = "AntiFlickZone"
-    part.Transparency = 0.45
-    part.Anchored = true
-    part.CanCollide = false
-    part.BrickColor = BrickColor.new("Bright blue")
-    part.Parent = self.partContainer
-    return part
-end
-
---- Returns a part to the object pool.
-function JJS_Core.BetterDetection:ReturnPart(part)
-    if part and part:IsA("BasePart") then
-        part.Parent = nil
-        table.insert(self.partPool, part)
-    end
-end
-
---- Utility: Checks if a point is inside a part.
-function JJS_Core.BetterDetection:IsPointInsidePart(part, point)
-    if not (part and point) then return false end
-    local rel = part.CFrame:PointToObjectSpace(point)
-    local half = part.Size * 0.5
-    return math.abs(rel.X) <= half.X + 0.001 and
-           math.abs(rel.Y) <= half.Y + 0.001 and
-           math.abs(rel.Z) <= half.Z + 0.001
-end
-
---- Main BD check logic. Spawns parts to detect attacks.
-function JJS_Core.BetterDetection:RunCheck(sound, idParam)
-    local C = JJS_Core.Config
-    local Cache = JJS_Core.Cache
-    if not (C.AutoParryAudio and C.BetterDetection) then return end
-    if not (sound and sound:IsA("Sound") and sound.IsPlaying) then return end
-
-    local id = idParam or (Cache.SoundHooks[sound] and Cache.SoundHooks[sound].id) or JJS_Core.Hooks:ExtractSoundId(sound)
-    if not id or not JJS_Core.GameData.AssetIDs.AttackSounds[id] then return end
-
-    local t = tick()
-    if Cache.SoundBlockedUntil[sound] and t < Cache.SoundBlockedUntil[sound] then return end
-
-    local myChar = LocalPlayer.Character
-    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
-
-    local char = JJS_Core.Hooks:GetCharacterFromDescendant(sound)
-    local plr = char and Services.Players:GetPlayerFromCharacter(char)
-    if not plr or plr == LocalPlayer then return end
-
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    
-    if (hrp.Position - myRoot.Position).Magnitude > (C.DetectionRange + 20) then
-        return
-    end
-
-    local basePartSize = Vector3.new(5.5, 7.5, 8.5) * C.BD_PartSizeMult
-    local count = C.BD_PartCount
-    local base = C.BD_Distance
-    local step = 0 -- Not using offset step from Forsaken script unless added to UI
-    local lifeTime = 0.2
-    
-    local function createAndCheckPart(i)
-        if not hrp or not myRoot or not hrp.Parent or not myRoot.Parent then return true end
-
-        local dist = base + (i - 1) * step
-        local st = JJS_Core.Prediction.state[plr] or { vel = Vector3.new(), angVel = 0 }
-        local vel = st.vel or Vector3.new()
-        
-        local pStrength = C.BD_PredictionFwd
-        local pTurn = C.BD_PredictionTurn
-        
-        local forwardSpeed = vel:Dot(hrp.CFrame.LookVector)
-        local lateralSpeed = vel:Dot(hrp.CFrame.RightVector)
-
-        local P = JJS_Core.Prediction
-        local forwardPredict = math.clamp(forwardSpeed * P.PRED_SECONDS_FORWARD * pStrength, -P.PRED_MAX_FORWARD * pStrength, P.PRED_MAX_FORWARD * pStrength)
-        local lateralPredict = math.clamp(lateralSpeed * P.PRED_SECONDS_LATERAL * pStrength, -P.PRED_MAX_LATERAL * pStrength, P.PRED_MAX_LATERAL * pStrength)
-        local turnLateral = math.clamp(st.angVel * P.ANG_TURN_MULTIPLIER * pTurn, -P.PRED_MAX_LATERAL * pTurn, P.PRED_MAX_LATERAL * pTurn)
-
-        local forwardDist = dist + forwardPredict
-        local spawnPos = hrp.Position +
-                         hrp.CFrame.LookVector * forwardDist +
-                         hrp.CFrame.RightVector * (lateralPredict + turnLateral)
-
-        local part = self:GetPart()
-        part.Size = basePartSize
-        part.CFrame = CFrame.new(spawnPos, hrp.Position)
-        
-        Services.Debris:AddItem(part, lifeTime)
-        task.delay(lifeTime, self.ReturnPart, self, part)
-
-        local blocked = self:IsPointInsidePart(part, myRoot.Position)
-        if not blocked then
-            pcall(function()
-                for _, p in ipairs(myRoot:GetTouchingParts()) do
-                    if p == part then blocked = true; break end
-                end
-            end)
-        end
-
-        if blocked then
-            if not (C.FacingCheck and not JJS_Core:IsFacing(myRoot, hrp)) then
-                JJS_Core:FireDefensive(hrp)
-                Cache.SoundBlockedUntil[sound] = t + 1.2
-            end
-            return true
-        end
-        return false
-    end
-    
-    -- Run logic based on Instant BD toggle
-    if C.BD_Instant then
-        task.wait(C.BD_DelayFirst)
-        for i = 1, count do
-            if createAndCheckPart(i) then break end
-        end
-    else
-        task.spawn(function()
-            task.wait(C.BD_DelayFirst)
-            for i = 1, count do
-                if createAndCheckPart(i) then break end
-                if C.BD_DelayStagger > 0 then task.wait(C.BD_DelayStagger) else task.wait() end
-            end
-        end)
-    end
-end
-
--- ===================================================================
--- ===== 9. VISUALS MODULE (ESP, Trackers)
+-- ===== 7. VISUALS MODULE (ESP, Trackers)
 -- ===================================================================
 JJS_Core.Visuals = {
-    detectionCircles = {},
-    facingVisuals = {}
+    detectionCircles = {}
 }
 
 function JJS_Core.Visuals:AddESP(obj)
     if not obj:IsA("Model") then return end
     local hrp = obj:FindFirstChild("HumanoidRootPart")
     if not hrp or obj:FindFirstChild("ESP_Highlight") then return end
-
-    local highlight = Instance.new("Highlight")
-    highlight.Name = "ESP_Highlight"
-    highlight.FillColor = Color3.fromRGB(255, 0, 0)
-    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    local highlight = Instance.new("Highlight"); highlight.Name = "ESP_Highlight"
+    highlight.FillColor = Color3.fromRGB(255, 0, 0); highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Adornee = obj
-    highlight.Parent = obj
-
-    local billboard = Instance.new("BillboardGui")
-    billboard.Name = "ESP_Billboard"
-    billboard.Size = UDim2.new(0, 100, 0, 50)
-    billboard.AlwaysOnTop = true
-    billboard.Adornee = hrp
-    billboard.Parent = obj
-
-    local textLabel = Instance.new("TextLabel")
-    textLabel.Name = "ESP_Text"
-    textLabel.Size = UDim2.new(1, 0, 1, 0)
-    textLabel.BackgroundTransparency = 1
-    textLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
-    textLabel.TextScaled = true
-    textLabel.Font = Enum.Font.SourceSansBold
-    textLabel.Text = obj.Name
+    highlight.Adornee = obj; highlight.Parent = obj
+    local billboard = Instance.new("BillboardGui"); billboard.Name = "ESP_Billboard"
+    billboard.Size = UDim2.new(0, 100, 0, 50); billboard.AlwaysOnTop = true
+    billboard.Adornee = hrp; billboard.Parent = obj
+    local textLabel = Instance.new("TextLabel"); textLabel.Name = "ESP_Text"
+    textLabel.Size = UDim2.new(1, 0, 1, 0); textLabel.BackgroundTransparency = 1
+    textLabel.TextColor3 = Color3.fromRGB(255, 0, 0); textLabel.TextScaled = true
+    textLabel.Font = Enum.Font.SourceSansBold; textLabel.Text = obj.Name
     textLabel.Parent = billboard
 end
 
@@ -470,20 +181,14 @@ function JJS_Core.Visuals:AddPlayerCircle(player)
     local char = player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp or self.detectionCircles[player] then return end
-
-    local circle = Instance.new("CylinderHandleAdornment")
-    circle.Name = "PlayerDetectionCircle"
-    circle.Adornee = hrp
-    circle.Color3 = Color3.fromRGB(255, 0, 0)
-    circle.AlwaysOnTop = true
-    circle.ZIndex = 1
-    circle.Transparency = 0.6
-    circle.Radius = JJS_Core.Config.DetectionRange
+    local circle = Instance.new("CylinderHandleAdornment"); circle.Name = "PlayerDetectionCircle"
+    circle.Adornee = hrp; circle.Color3 = Color3.fromRGB(255, 0, 0)
+    circle.AlwaysOnTop = true; circle.ZIndex = 1; circle.Transparency = 0.6
+    circle.Radius = JJS_Core.Config.Block_MaxRange -- Set to max block range
     circle.Height = 0.12
     local yOffset = -(hrp.Size.Y / 2 + 0.05)
     circle.CFrame = CFrame.new(0, yOffset, 0) * CFrame.Angles(math.rad(90), 0, 0)
-    circle.Parent = hrp
-    self.detectionCircles[player] = circle
+    circle.Parent = hrp; self.detectionCircles[player] = circle
 end
 
 function JJS_Core.Visuals:RemovePlayerCircle(player)
@@ -505,90 +210,20 @@ function JJS_Core.Visuals:RefreshPlayerCircles()
     end
 end
 
-function JJS_Core.Visuals:UpdateFacingVisual(player, visual)
-    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp or not visual or not visual.Parent then return end
-
-    local C = JJS_Core.Config
-    local dot = math.clamp(C.FacingDot, -1, 1)
-    local angle = math.acos(dot)
-    local frac = angle / math.pi
-    local radius = math.max(1, C.DetectionRange * (0.20 + (1 - 0.20) * frac))
-    visual.Radius = radius
-    visual.Height = 0.12
-    visual.CFrame = CFrame.new(0, -(hrp.Size.Y / 2 + 0.05), -(C.DetectionRange * (0.35 + 0.15 * frac))) * CFrame.Angles(math.rad(90), 0, 0)
-
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    local inRange, facingOkay = false, false
-    if myRoot and hrp then
-        inRange = (hrp.Position - myRoot.Position).Magnitude <= C.DetectionRange
-        facingOkay = (not C.FacingCheck) or JJS_Core:IsFacing(myRoot, hrp)
-    end
-    visual.Color3 = (inRange and facingOkay) and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 255, 0)
-    visual.Transparency = (inRange and facingOkay) and 0.40 or 0.85
-end
-
-function JJS_Core.Visuals:AddFacingVisual(player)
-    local char = player.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp or self.facingVisuals[player] then return end
-
-    local visual = Instance.new("CylinderHandleAdornment")
-    visual.Name = "FacingCheckVisual"
-    visual.Adornee = hrp
-    visual.AlwaysOnTop = true
-    visual.ZIndex = 2
-    visual.Transparency = 0.55
-    visual.Color3 = Color3.fromRGB(0, 255, 0)
-    visual.Parent = hrp
-    self.facingVisuals[player] = visual
-    self:UpdateFacingVisual(player, visual)
-end
-
-function JJS_Core.Visuals:RemoveFacingVisual(player)
-    if self.facingVisuals[player] then
-        self.facingVisuals[player]:Destroy()
-        self.facingVisuals[player] = nil
-    end
-end
-
-function JJS_Core.Visuals:RefreshFacingVisuals()
-    for _, player in ipairs(Services.Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            if JJS_Core.Config.FacingVisual then
-                self:AddFacingVisual(player)
-            else
-                self:RemoveFacingVisual(player)
-            end
-        end
-    end
-end
-
---- Main update loop for visuals, called from RenderStepped
 function JJS_Core.Visuals:Update()
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local myRoot = JJS_Core.Cache.RootPart
     if not myRoot then return end
-    
     local C = JJS_Core.Config
-    
     for player, visual in pairs(self.detectionCircles) do
         if C.RangeVisual and player.Character then
-            visual.Radius = C.DetectionRange
+            visual.Radius = C.Block_MaxRange
         else
             self:RemovePlayerCircle(player)
         end
     end
-    
-    for player, visual in pairs(self.facingVisuals) do
-        if C.FacingVisual and player.Character then
-            self:UpdateFacingVisual(player, visual)
-        else
-            self:RemoveFacingVisual(player)
-        end
-    end
-    
     if C.PlayerESP then
-        for player, _ in pairs(JJS_Core.Prediction.state) do
+        for _, player in pairs(Services.Players:GetPlayers()) do
+            if player == LocalPlayer then continue end
             local char = player.Character
             if char then
                 local billboard = char:FindFirstChild("ESP_Billboard")
@@ -602,177 +237,103 @@ function JJS_Core.Visuals:Update()
     end
 end
 
---- Hooks visual events to players joining/leaving
 function JJS_Core.Visuals:Init()
     Services.Players.PlayerAdded:Connect(function(player)
         player.CharacterAdded:Connect(function(char)
             task.wait(0.1)
             if JJS_Core.Config.PlayerESP then self:AddESP(char) end
             if JJS_Core.Config.RangeVisual then self:AddPlayerCircle(player) end
-            if JJS_Core.Config.FacingVisual then self:AddFacingVisual(player) end
         end)
     end)
     Services.Players.PlayerRemoving:Connect(function(player)
         self:RemovePlayerCircle(player)
-        self:RemoveFacingVisual(player)
         if player.Character then self:ClearESP(player.Character) end
     end)
-    -- Refresh for all current players
     self:RefreshESP()
     self:RefreshPlayerCircles()
-    self:RefreshFacingVisuals()
 end
 
 -- ===================================================================
--- ===== 10. HOOKS MODULE (Sound, Player)
+-- ===== 8. HOOKS MODULE (Player & VFX)
 -- ===================================================================
 JJS_Core.Hooks = {}
-
---- Extracts the numeric ID from a sound's SoundId string.
-function JJS_Core.Hooks:ExtractSoundId(sound)
-    if not sound then return nil end
-    local sid = sound.SoundId
-    if not sid then return nil end
-    sid = (type(sid) == "string") and sid or tostring(sid)
-    local num =
-        string.match(sid, "rbxassetid://(%d+)") or
-        string.match(sid, "://(%d+)") or
-        string.match(sid, "^(%d+)$")
-    if num and #num > 0 then return num end
-    return nil
-end
-
---- Gets the character model from a descendant part.
-function JJS_Core.Hooks:GetCharacterFromDescendant(inst)
-    if not inst then return nil end
-    local model = inst:FindFirstAncestorOfClass("Model")
-    if model and model:FindFirstChildOfClass("Humanoid") then
-        return model
-    end
-    return nil
-end
-
---- Attaches event listeners to a sound object.
-function JJS_Core.Hooks:HookSound(sound)
-    local Cache = JJS_Core.Cache
-    if not (sound and sound:IsA("Sound") and not Cache.SoundHooks[sound]) then
-        return
-    end
-    
-    local preId = self:ExtractSoundId(sound)
-    local hook = { id = preId }
-    Cache.SoundHooks[sound] = hook
-
-    local function handleAttempt()
-        if JJS_Core.Config.BetterDetection then
-            JJS_Core.BetterDetection:RunCheck(sound, preId)
-        else
-            JJS_Core:AttemptParryForSound(sound, preId)
-        end
-    end
-
-    hook.playedConn = sound.Played:Connect(handleAttempt)
-    hook.propConn = sound:GetPropertyChangedSignal("IsPlaying"):Connect(function()
-        if sound.IsPlaying then handleAttempt() end
-    end)
-    hook.destroyConn = sound.Destroying:Connect(function()
-        if hook.playedConn then hook.playedConn:Disconnect() end
-        if hook.propConn then hook.propConn:Disconnect() end
-        if hook.destroyConn then hook.destroyConn:Disconnect() end
-        Cache.SoundHooks[sound] = nil
-        Cache.SoundBlockedUntil[sound] = nil
-    end)
-
-    if sound.IsPlaying then handleAttempt() end
-end
-
---- Scans and hooks all sounds in the workspace.
-function JJS_Core.Hooks:InitSound()
-    task.spawn(function()
-        for _, desc in ipairs(workspace:GetDescendants()) do
-            if desc:IsA("Sound") then
-                pcall(self.HookSound, self, desc)
-            end
-        end
-        print("JJS Core: Background sound scan complete.")
-    end)
-    workspace.DescendantAdded:Connect(function(desc)
-        if desc:IsA("Sound") then
-            pcall(self.HookSound, self, desc)
-        end
-    end)
-end
-
---- Monitors local player health for chat messages.
-function JJS_Core.Hooks:SetupHealthMonitor(char)
-    local Cache = JJS_Core.Cache
-    local C = JJS_Core.Config
-    
-    if Cache.HealthConnection then
-        Cache.HealthConnection:Disconnect()
-        Cache.HealthConnection = nil
-    end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then hum = char:WaitForChild("Humanoid", 5) end
-    
-    if hum then
-        Cache.PreviousHealth = hum.Health
-        Cache.IsAlreadyLow = hum.Health <= C.LowHealthAmount
-        Cache.HealthConnection = hum.HealthChanged:Connect(function(newHealth)
-            local now = tick()
-            if C.SayOnDamage and newHealth < Cache.PreviousHealth then
-                if now - Cache.LastDamageMessageTime > 2.0 then
-                    local validMessages = {}
-                    for _, msg in ipairs(C.MessagesOnDamage) do
-                        if msg and #msg > 0 then table.insert(validMessages, msg) end
-                    end
-                    if #validMessages > 0 then
-                        local chosen = validMessages[math.random(1, #validMessages)]
-                        Cache.LastDamageMessageTime = now
-                        JJS_Core:SendChatMessage(chosen)
-                    end
-                end
-            end
-            if C.SayOnLowHealth and C.MessageOnLowHealth and #C.MessageOnLowHealth > 0 then
-                if newHealth <= C.LowHealthAmount and not Cache.IsAlreadyLow then
-                    Cache.IsAlreadyLow = true
-                    JJS_Core:SendChatMessage(C.MessageOnLowHealth)
-                elseif newHealth > C.LowHealthAmount then
-                    Cache.IsAlreadyLow = false
-                end
-            end
-            Cache.PreviousHealth = newHealth
-        end)
-    end
-end
 
 --- Hooks to the local player's character.
 function JJS_Core.Hooks:InitPlayer()
     LocalPlayer.CharacterAdded:Connect(function(char)
         task.wait(0.5)
-        JJS_Core.Cache.Humanoid = char:FindFirstChildOfClass("Humanoid")
-        JJS_Core.Cache.Animator = JJS_Core.Cache.Humanoid and JJS_Core.Cache.Humanoid:FindFirstChildOfClass("Animator")
-        self:SetupHealthMonitor(char)
+        JJS_Core.Cache.Humanoid = char:WaitForChild("Humanoid")
+        JJS_Core.Cache.Animator = JJS_Core.Cache.Humanoid:WaitForChild("Animator")
+        JJS_Core.Cache.RootPart = char:WaitForChild("HumanoidRootPart")
     end)
     if LocalPlayer.Character then
         local char = LocalPlayer.Character
         JJS_Core.Cache.Humanoid = char:FindFirstChildOfClass("Humanoid")
         JJS_Core.Cache.Animator = JJS_Core.Cache.Humanoid and JJS_Core.Cache.Humanoid:FindFirstChildOfClass("Animator")
-        self:SetupHealthMonitor(char)
+        JJS_Core.Cache.RootPart = char:FindFirstChild("HumanoidRootPart")
     end
 end
 
+--- Monitors Workspace for new VFX parts.
+function JJS_Core.Hooks:InitVFX()
+    local Cache = JJS_Core.Cache
+    local GD = JJS_Core.GameData
+    
+    local function remove(list, obj)
+        for i = #list, 1, -1 do
+            if list[i] == obj then
+                table.remove(list, i)
+                return
+            end
+        end
+    end
+
+    Services.Workspace.DescendantAdded:Connect(function(obj)
+        if not obj:IsA("BasePart") then return end
+        local name = obj.Name
+        if GD.VFX_Triggers[name] then
+            table.insert(Cache.Active_Triggers, obj)
+        elseif GD.Dodge_Triggers[name] then
+            table.insert(Cache.Active_Dangers, obj)
+        end
+    end)
+    
+    Services.Workspace.DescendantRemoving:Connect(function(obj)
+        if not obj:IsA("BasePart") then return end
+        local name = obj.Name
+        if GD.VFX_Triggers[name] then
+            remove(Cache.Active_Triggers, obj)
+        elseif GD.Dodge_Triggers[name] then
+            remove(Cache.Active_Dangers, obj)
+        end
+    end)
+    
+    -- Scan for any existing parts
+    task.spawn(function()
+        for _, obj in ipairs(Services.Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                local name = obj.Name
+                if GD.VFX_Triggers[name] then
+                    table.insert(Cache.Active_Triggers, obj)
+                elseif GD.Dodge_Triggers[name] then
+                    table.insert(Cache.Active_Dangers, obj)
+                end
+            end
+        end
+        print("JJS Core: Initial VFX scan complete. Ready.")
+    end)
+end
+
 -- ===================================================================
--- ===== 11. CORE FUNCTIONS (Combat, Utils)
+-- ===== 9. CORE FUNCTIONS (Combat, Utils)
 -- ===================================================================
 
---- Fires the appropriate defensive action (Parry or Counter).
---- Includes stealth humanization.
-function JJS_Core:FireDefensive(targetHrp)
+--- Fires the appropriate defensive action (Block or Counter).
+function JJS_Core:FireDefensive()
     local Cache = JJS_Core.Cache
     local C = JJS_Core.Config
     local now = tick()
-    if now - Cache.LastLocalParryTime < C.LocalParryCooldown then return end
+    if now - Cache.LastLocalBlockTime < C.LocalBlockCooldown then return end
     
     -- [STEALTH] Humanize the reaction
     self.Stealth:Humanize()
@@ -784,281 +345,201 @@ function JJS_Core:FireDefensive(targetHrp)
                 Cache.AbilityRemote:FireServer(C.CounterAbilitySlot) 
             end)
             Cache.LastAbilityTime = tick()
-            Cache.LastLocalParryTime = tick() -- Share cooldown
+            Cache.LastLocalBlockTime = tick()
             return
         end
     end
     
-    -- Default to Parry
-    if Cache.ParryRemote then
+    -- Default to Block
+    if Cache.BlockRemote then
         pcall(function()
-            Cache.ParryRemote:FireServer()
+            Cache.BlockRemote:FireServer()
         end)
-        Cache.LastLocalParryTime = tick()
+        Cache.LastLocalBlockTime = tick()
     end
-end
-
---- Standard audio-based parry (no BD).
-function JJS_Core:AttemptParryForSound(sound, idParam)
-    local C = JJS_Core.Config
-    local Cache = JJS_Core.Cache
-    if not C.AutoParryAudio or C.BetterDetection then return end
-    if not (sound and sound:IsA("Sound") and sound.IsPlaying) then return end
-
-    local id = idParam or (Cache.SoundHooks[sound] and Cache.SoundHooks[sound].id) or JJS_Core.Hooks:ExtractSoundId(sound)
-    if not id or not JJS_Core.GameData.AssetIDs.AttackSounds[id] then return end
-    if tick() - Cache.LastLocalParryTime < C.LocalParryCooldown then return end
-
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
-
-    local char = JJS_Core.Hooks:GetCharacterFromDescendant(sound)
-    local plr = char and Services.Players:GetPlayerFromCharacter(char)
-    if not plr or plr == LocalPlayer then return end
-
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local predictedPos = JJS_Core.Prediction:GetPredictedPosition(plr, hrp, 0.08)
-    
-    if (predictedPos - myRoot.Position).Magnitude > C.DetectionRange then
-        return
-    end
-    if C.FacingCheck and not JJS_Core:IsFacing(myRoot, hrp) then
-        return
-    end
-
-    self:FireDefensive(hrp)
-end
-
---- Checks if the local player is facing the target.
-function JJS_Core:IsFacing(localRoot, targetRoot)
-    local C = JJS_Core.Config
-    if not C.FacingCheck then return true end
-    local toTarget = (localRoot.Position - targetRoot.Position).Unit
-    local look = targetRoot.CFrame.LookVector
-    local dot = toTarget:Dot(look)
-    return dot > C.FacingDot
-end
-
---- Sends a chat message.
-function JJS_Core:SendChatMessage(text)
-    if not text or text:match("^%s*$") then return end
-    pcall(function()
-        Services.TextChatService.TextChannels.RBXGeneral:SendAsync(text)
-    end)
 end
 
 --- Main Aimbot Logic.
 function JJS_Core:UpdateAimbot()
     local C = JJS_Core.Config
     local Cache = JJS_Core.Cache
-    if not C.Aimbot or not Cache.Animator or not Cache.Humanoid then
-        if Cache.Humanoid then pcall(function() Cache.Humanoid.AutoRotate = true end) end
-        return 
-    end
-    
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
+    if not C.Aimbot or not Cache.RootPart then return end
 
-    -- Find closest target
-    local bestTarget, closestDist = nil, 50 -- 50 stud aimbot range
-    for player, state in pairs(JJS_Core.Prediction.state) do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local dist = (hrp.Position - myRoot.Position).Magnitude
-            if dist < closestDist then
-                bestTarget = hrp
-                closestDist = dist
-            end
-        end
-    end
-    
-    if not bestTarget then
-        pcall(function() Cache.Humanoid.AutoRotate = true end)
-        return
-    end
-
-    -- Check if we are in a combat animation
-    local isUsingAbility = false
-    for _, track in ipairs(Cache.Animator:GetPlayingAnimationTracks()) do
-        local animId = tostring(track.Animation.AnimationId):match("%d+")
-        -- [RECON] This should be a list of *your own* attack anims
-        if JJS_Core.GameData.AssetIDs.AttackAnims[animId] or JJS_Core.GameData.AssetIDs.ParryAnims[animId] then
-            isUsingAbility = true
-            break
-        end
-    end
-
-    if isUsingAbility then
-        pcall(function()
-            Cache.Humanoid.AutoRotate = false
-            local predictedPos = bestTarget.Position + (bestTarget.CFrame.LookVector * C.AimbotPrediction)
-            myRoot.CFrame = CFrame.lookAt(myRoot.Position, predictedPos)
-        end)
-    else
-        pcall(function() Cache.Humanoid.AutoRotate = true end)
-    end
-end
-
---- Main Animation-based Parry Logic.
-function JJS_Core:UpdateAnimParry()
-    local C = JJS_Core.Config
-    local Cache = JJS_Core.Cache
-    if not C.AutoParryAnim or C.BetterDetection then return end
-    if tick() - Cache.LastLocalParryTime < C.LocalParryCooldown then return end
-    
-    local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not myRoot then return end
-    
-    local bestTarget, closestDist = nil, C.DetectionRange
-    
-    for player, state in pairs(JJS_Core.Prediction.state) do
-        local char = player.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        
-        if hrp and hum then
-            local predictedPos = self.Prediction:GetPredictedPosition(player, hrp, 0.05)
-            local dist = (myRoot.Position - predictedPos).Magnitude
-            
-            if dist < closestDist and self:IsFacing(myRoot, hrp) then
-                local animator = hum:FindFirstChildOfClass("Animator")
-                if animator then
-                    local isAttacking = false
-                    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                        local id = tostring(track.Animation.AnimationId):match("%d+")
-                        if JJS_Core.GameData.AssetIDs.AttackAnims[id] then
-                            isAttacking = true
-                            break
-                        end
-                    end
-                    if isAttacking then
-                        bestTarget = hrp
-                        closestDist = dist
-                    end
+    local bestTarget, bestDist = nil, C.Aimbot_Range
+    for _, player in ipairs(Services.Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local dist = (Cache.RootPart.Position - hrp.Position).Magnitude
+                if dist < bestDist then
+                    bestTarget, bestDist = hrp, dist
                 end
             end
         end
     end
     
     if bestTarget then
-        self:FireDefensive(bestTarget)
+        Cache.RootPart.CFrame = CFrame.lookAt(Cache.RootPart.Position, Vector3.new(bestTarget.Position.X, Cache.RootPart.Position.Y, bestTarget.Position.Z))
+    end
+end
+
+--- Main Auto-Dodge Logic.
+function JJS_Core:UpdateAutoDodge()
+    local C = JJS_Core.Config
+    local Cache = JJS_Core.Cache
+    if not C.AutoDodge or not Cache.RootPart then return end
+    
+    local now = tick()
+    if now - Cache.LastDodgeTime < C.Dodge_Cooldown then return end
+    
+    for i = #Cache.Active_Dangers, 1, -1 do
+        local part = Cache.Active_Dangers[i]
+        if not (part and part.Parent) then
+            table.remove(Cache.Active_Dangers, i)
+            continue
+        end
+        
+        local dist = (Cache.RootPart.Position - part.Position).Magnitude
+        if dist <= C.Dodge_Range then
+            Cache.LastDodgeTime = now
+            
+            -- Teleport logic from the script
+            local dir = (Cache.RootPart.Position - part.Position).Unit
+            local tgt = Cache.RootPart.Position + (dir * C.Dodge_Distance) -- Teleport away
+            
+            -- Raycast down to find the floor
+            local rayO = tgt + Vector3.new(0, 50, 0)
+            local rayD = Vector3.new(0, -150, 0)
+            local rp = RaycastParams.new()
+            rp.FilterDescendantsInstances = {LocalPlayer.Character}
+            rp.FilterType = Enum.RaycastFilterType.Blacklist
+            local res = Services.Workspace:Raycast(rayO, rayD, rp)
+            
+            if res then
+                tgt = Vector3.new(tgt.X, res.Position.Y + 2, tgt.Z)
+            else
+                tgt = Vector3.new(tgt.X, Cache.RootPart.Position.Y, tgt.Z)
+            end
+            
+            Cache.RootPart.CFrame = CFrame.new(tgt)
+            break -- Only dodge one threat per frame
+        end
+    end
+end
+
+--- Main Auto-Block Logic (Hitbox-Based).
+function JJS_Core:UpdateHitboxBlock()
+    local C = JJS_Core.Config
+    local Cache = JJS_Core.Cache
+    if not C.AutoBlock or not Cache.RootPart then return end
+    
+    local now = tick()
+    if now - Cache.LastLocalBlockTime < C.LocalBlockCooldown then return end
+
+    for i = #Cache.Active_Triggers, 1, -1 do
+        local part = Cache.Active_Triggers[i]
+        if not (part and part.Parent) then
+            table.remove(Cache.Active_Triggers, i)
+            continue
+        end
+        
+        local dist = (Cache.RootPart.Position - part.Position).Magnitude
+        
+        -- Special case from the script you found
+        if part.Name == "CombatTrail" and dist <= 1 then
+            -- This is a "too-close" check, we ignore it.
+        elseif dist >= C.Block_MinRange and dist <= C.Block_MaxRange then
+            -- This is a valid threat
+            self:FireDefensive()
+            break -- Only block one threat per frame
+        end
     end
 end
 
 -- ===================================================================
--- ===== 12. RAYFIELD UI INITIALIZATION
+-- ===== 10. RAYFIELD UI INITIALIZATION
 -- ===================================================================
 function JJS_Core:InitUI()
-    local C = JJS_Core.Config -- Shorthand for callbacks
+    local C = JJS_Core.Config
     
     local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
     
-    -- [STEALTH] Use random names for the UI
     local Window = Rayfield:CreateWindow({
         Name = self.Stealth:GetRandomName(),
         LoadingTitle = self.Stealth:GetRandomName(),
         LoadingSubtitle = "by " .. self.Stealth:GetRandomName(),
         ConfigurationSaving = {
             Enabled = true,
-            FolderName = "JJS_HubConfig",
+            FolderName = "JJS_HubConfig_v4",
             FileName = "Settings"
         },
         Discord = { Enabled = false },
         KeySystem = false
     })
     
-    -- AutoParryTab
-    local AutoParryTab = Window:CreateTab("Auto Parry", 4483362458)
-    AutoParryTab:CreateToggle({
-        Name = "Auto Parry (Animation)", CurrentValue = C.AutoParryAnim, Flag = "AutoParryAnimation",
-        Callback = function(Value) C.AutoParryAnim = Value end
+    -- AutoBlockTab
+    local AutoBlockTab = Window:CreateTab("Auto Block", 4483362458)
+    AutoBlockTab:CreateParagraph({
+        Title = "Hitbox-Based Auto Block",
+        Content = "This script works by detecting the *Names* of attack VFX parts. Add/remove names in the script's `VFX_Triggers` list."
     })
-    AutoParryTab:CreateToggle({
-        Name = "Auto Parry (Audio)", CurrentValue = C.AutoParryAudio, Flag = "AutoParryAudio",
-        Callback = function(Value) C.AutoParryAudio = Value end
+    AutoBlockTab:CreateToggle({
+        Name = "Auto Block (Hitbox)", CurrentValue = C.AutoBlock, Flag = "AutoBlockHitbox",
+        Callback = function(Value) C.AutoBlock = Value end
     })
-    AutoParryTab:CreateToggle({
+    AutoBlockTab:CreateSlider({
+        Name = "Block Min Distance", Range = {0, 10}, Suffix = "s", CurrentValue = C.Block_MinRange, Flag = "BlockMinRange",
+        Callback = function(val) C.Block_MinRange = val end
+    })
+    AutoBlockTab:CreateSlider({
+        Name = "Block Max Distance", Range = {5, 30}, Suffix = "s", CurrentValue = C.Block_MaxRange, Flag = "BlockMaxRange",
+        Callback = function(val) C.Block_MaxRange = val end
+    })
+    
+    AutoBlockTab:CreateParagraph({ Title = "Auto Dodge" })
+    AutoBlockTab:CreateToggle({
+        Name = "Auto Dodge (Teleport)", CurrentValue = C.AutoDodge, Flag = "AutoDodgeToggle",
+        Callback = function(Value) C.AutoDodge = Value end
+    })
+    AutoBlockTab:CreateSlider({
+        Name = "Dodge Trigger Range", Range = {10, 100}, Suffix = "s", CurrentValue = C.Dodge_Range, Flag = "DodgeRange",
+        Callback = function(val) C.Dodge_Range = val end
+    })
+    AutoBlockTab:CreateSlider({
+        Name = "Dodge Teleport Distance", Range = {10, 100}, Suffix = "s", CurrentValue = C.Dodge_Distance, Flag = "DodgeDistance",
+        Callback = function(val) C.Dodge_Distance = val end
+    })
+    AutoBlockTab:CreateSlider({
+        Name = "Dodge Cooldown", Range = {0.5, 5}, Suffix = "s", CurrentValue = C.Dodge_Cooldown, Flag = "DodgeCooldown",
+        Callback = function(val) C.Dodge_Cooldown = val end
+    })
+    
+    AutoBlockTab:CreateParagraph({ Title = "Auto Counter" })
+    AutoBlockTab:CreateToggle({
         Name = "Auto Ability Counter", CurrentValue = C.AutoCounter, Flag = "AutoCounterToggle",
         Callback = function(Value) C.AutoCounter = Value end
     })
-    AutoParryTab:CreateInput({
+    AutoBlockTab:CreateInput({
         Name = "Counter Ability Slot (1-5)", PlaceholderText = C.CounterAbilitySlot, Flag = "CounterAbilitySlot",
         Callback = function(Text) C.CounterAbilitySlot = tonumber(Text) or C.CounterAbilitySlot end
     })
-    AutoParryTab:CreateSlider({
+    AutoBlockTab:CreateSlider({
         Name = "Auto Counter Cooldown", Range = {1, 30}, CurrentValue = C.CounterAbilityCooldown, Flag = "CounterAbilityCooldown",
         Callback = function(val) C.CounterAbilityCooldown = val end
     })
-    AutoParryTab:CreateInput({
-        Name = "Detection Range", PlaceholderText = C.DetectionRange, Flag = "DetectionRange",
-        Callback = function(Text) C.DetectionRange = tonumber(Text) or C.DetectionRange end
+    
+    AutoBlockTab:CreateParagraph({ Title = "[STEALTH] Settings" })
+    AutoBlockTab:CreateSlider({
+        Name = "Local Block Cooldown", Range = {0.1, 1.0}, Suffix = "s", CurrentValue = C.LocalBlockCooldown, Flag = "LocalCooldownSlider",
+        Callback = function(val) C.LocalBlockCooldown = val end
     })
-    AutoParryTab:CreateToggle({
-        Name = "Enable Facing Check", CurrentValue = C.FacingCheck, Flag = "FacingCheckToggle",
-        Callback = function(Value) C.FacingCheck = Value end
-    })
-    AutoParryTab:CreateInput({
-        Name = "Facing Check angle (DOT)", PlaceholderText = C.FacingDot, Flag = "Facingcheckdot",
-        Callback = function(Text) C.FacingDot = tonumber(Text) or C.FacingDot end
-    })
-    AutoParryTab:CreateToggle({
-        Name = "Enable Ping Compensation", CurrentValue = C.PingCompensation, Flag = "PingCompensationToggle",
-        Callback = function(state) C.PingCompensation = state end
-    })
-    AutoParryTab:CreateSlider({
-        Name = "Local Parry Cooldown", Range = {0.1, 1.0}, Suffix = "s", CurrentValue = C.LocalParryCooldown, Flag = "LocalCooldownSlider",
-        Callback = function(val) C.LocalParryCooldown = val end
-    })
-    AutoParryTab:CreateParagraph({ Title = "[STEALTH] Humanizer" })
-    AutoParryTab:CreateSlider({
+    AutoBlockTab:CreateSlider({
         Name = "Min Reaction Time", Range = {10, 250}, Suffix = "ms", CurrentValue = C.MinReactionMS, Flag = "MinReactionTime",
         Callback = function(val) C.MinReactionMS = val end
     })
-    AutoParryTab:CreateSlider({
+    AutoBlockTab:CreateSlider({
         Name = "Max Reaction Time", Range = {10, 250}, Suffix = "ms", CurrentValue = C.MaxReactionMS, Flag = "MaxReactionTime",
         Callback = function(val) C.MaxReactionMS = val end
-    })
-    
-    -- BDTab
-    local BDTab = Window:CreateTab("Better Detection", 4483362458)
-    BDTab:CreateToggle({
-        Name = "Enable Better Detection", CurrentValue = C.BetterDetection, Flag = "AntiFlickToggle",
-        Callback = function(state) C.BetterDetection = state end
-    })
-    BDTab:CreateToggle({
-        Name = "Instant BD (No Stagger)", CurrentValue = C.BD_Instant, Flag = "InstantBDToggle",
-        Callback = function(state) C.BD_Instant = state end
-    })
-    BDTab:CreateSlider({
-        Name = "BD Parts Count", Range = { 1, 16 }, Suffix = "parts", CurrentValue = C.BD_PartCount, Flag = "AntiFlickParts",
-        Callback = function(val) C.BD_PartCount = math.max(1, math.floor(val)) end
-    })
-    BDTab:CreateSlider({
-        Name = "BD Parts Size Multiplier", Range = { 0.1, 5 }, Suffix = "x", CurrentValue = C.BD_PartSizeMult, Flag = "BlockPartsSizeMultiplier",
-        Callback = function(val) C.BD_PartSizeMult = tonumber(val) or 1 end
-    })
-    BDTab:CreateSlider({
-        Name = "Forward Prediction Strength", Range = { 0, 10 }, Suffix = "x", CurrentValue = C.BD_PredictionFwd, Flag = "PredictionStrength",
-        Callback = function(val) C.BD_PredictionFwd = val end
-    })
-    BDTab:CreateSlider({
-        Name = "Turn Prediction Strength", Range = { 0, 10 }, Suffix = "x", CurrentValue = C.BD_PredictionTurn, Flag = "PredictionTurnStrength",
-        Callback = function(val) C.BD_PredictionTurn = val end
-    })
-    BDTab:CreateInput({
-        Name = "Delay before first part", PlaceholderText = C.BD_DelayFirst, Flag = "AntiFlickDelay",
-        Callback = function(text) C.BD_DelayFirst = math.max(0, tonumber(text) or 0) end
-    })
-    BDTab:CreateInput({
-        Name = "Delay between parts", PlaceholderText = C.BD_DelayStagger, Flag = "AntiFlickDelayEachParts",
-        Callback = function(text) C.BD_DelayStagger = math.max(0, tonumber(text) or 0) end
-    })
-    BDTab:CreateInput({
-        Name = "Part distance from enemy", PlaceholderText = C.BD_Distance, Flag = "AntiFlickDistanceInfront",
-        Callback = function(text) C.BD_Distance = math.max(0, tonumber(text) or 0) end
     })
     
     -- CombatTab
@@ -1067,9 +548,9 @@ function JJS_Core:InitUI()
         Name = "Aimbot", CurrentValue = C.Aimbot, Flag = "AimbotToggle",
         Callback = function(Value) C.Aimbot = Value end
     })
-    CombatTab:CreateSlider({
-        Name = "Aimbot Prediction", Range = { 0, 10 }, Suffix = "studs", CurrentValue = C.AimbotPrediction, Flag = "AimbotPrediction",
-        Callback = function(Value) C.AimbotPrediction = Value end
+    AutoBlockTab:CreateSlider({
+        Name = "Aimbot Range", Range = {10, 100}, Suffix = "s", CurrentValue = C.Aimbot_Range, Flag = "AimbotRange",
+        Callback = function(val) C.Aimbot_Range = val end
     })
     
     -- VisualsTab
@@ -1079,37 +560,8 @@ function JJS_Core:InitUI()
         Callback = function(Value) C.PlayerESP = Value; self.Visuals:RefreshESP() end
     })
     VisualsTab:CreateToggle({
-        Name = "Range Visual", CurrentValue = C.RangeVisual, Flag = "PlayerCircleToggle",
+        Name = "Range Visual (Max Block)", CurrentValue = C.RangeVisual, Flag = "PlayerCircleToggle",
         Callback = function(state) C.RangeVisual = state; self.Visuals:RefreshPlayerCircles() end
-    })
-    VisualsTab:CreateToggle({
-        Name = "Facing Check Visual", CurrentValue = C.FacingVisual, Flag = "FacingCheckVisualToggle",
-        Callback = function(state) C.FacingVisual = state; self.Visuals:RefreshFacingVisuals() end
-    })
-    
-    -- HealthTab
-    local HealthTab = Window:CreateTab("Health", 4483362458)
-    HealthTab:CreateToggle({
-        Name = "Say Message on Damage", CurrentValue = C.SayOnDamage, Flag = "SayOnDamageToggle",
-        Callback = function(Value) C.SayOnDamage = Value end
-    })
-    for i = 1, 10 do
-        HealthTab:CreateInput({
-            Name = "Damage Message " .. i, PlaceholderText = "...", Flag = "SayOnDamageText_" .. i,
-            Callback = function(Text) C.MessagesOnDamage[i] = Text end
-        })
-    end
-    HealthTab:CreateToggle({
-        Name = "Say Message on Low Health", CurrentValue = C.SayOnLowHealth, Flag = "SayOnLowHealthToggle",
-        Callback = function(Value) C.SayOnLowHealth = Value end
-    })
-    HealthTab:CreateInput({
-        Name = "Message on Low Health", PlaceholderText = C.MessageOnLowHealth, Flag = "SayOnLowHealthText",
-        Callback = function(Text) C.MessageOnLowHealth = Text end
-    })
-    HealthTab:CreateInput({
-        Name = "Low Health Threshold (HP)", PlaceholderText = C.LowHealthAmount, Flag = "LowHealthThreshold",
-        Callback = function(Text) C.LowHealthAmount = tonumber(Text) or C.LowHealthAmount end
     })
     
     -- MiscTab
@@ -1123,71 +575,66 @@ function JJS_Core:InitUI()
 end
 
 -- ===================================================================
--- ===== 13. MAIN INITIALIZATION
+-- ===== 11. MAIN INITIALIZATION
 -- ===================================================================
 function JJS_Core:Init()
     -- 1. Find Remote Events
     local GD = JJS_Core.GameData
     local Cache = JJS_Core.Cache
     pcall(function()
-        Cache.ParryRemote = Services.ReplicatedStorage:FindFirstChild(GD.Remotes.Parry, true)
+        Cache.BlockRemote = Services.ReplicatedStorage:FindFirstChild(GD.Remotes.Block, true)
         Cache.AbilityRemote = Services.ReplicatedStorage:FindFirstChild(GD.Remotes.Ability, true)
     end)
-    if not Cache.ParryRemote or not Cache.AbilityRemote then
-        warn("JJS Core: FAILED to find combat remotes. Check GameData config. Auto-parry WILL NOT work.")
+    if not Cache.BlockRemote then
+        warn("JJS Core: FAILED to find Block/Parry remote. Check GameData config. Auto-Block WILL NOT work.")
     else
-        print("JJS Core: Combat remotes found and linked.")
+        print("JJS Core: Block/Parry remote found and linked.")
+    end
+    if not Cache.AbilityRemote then
+        warn("JJS Core: FAILED to find Ability remote. Auto-Counter WILL NOT work.")
+    else
+        print("JJS Core: Ability remote found and linked.")
     end
 
-    -- 2. Start Ping Updater
-    task.spawn(function()
-        while task.wait(1) do
-            pcall(function()
-                Cache.CurrentPing = Services.Stats.Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-            end)
-        end
-    end)
-    
-    -- 3. Initialize Hooks
+    -- 2. Initialize Hooks
     self.Hooks:InitPlayer()
-    self.Hooks:InitSound()
+    self.Hooks:InitVFX()
     
-    -- 4. Initialize Visuals
+    -- 3. Initialize Visuals
     self.Visuals:Init()
 
-    -- 5. Initialize UI
+    -- 4. Initialize UI
     local Window = self:InitUI()
     
-    -- 6. Load Configuration
+    -- 5. Load Configuration
     Window:LoadConfiguration()
     
-    -- 7. Start Main Loops
-    Services.RunService.Heartbeat:Connect(function(dt)
-        self.Prediction:Update(dt)
-    end)
-    
-    Services.RunService.RenderStepped:Connect(function()
-        -- Refresh local player cache if missing
-        if not Cache.Animator or not Cache.Humanoid then
-            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
-                Cache.Humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-                Cache.Animator = Cache.Humanoid:FindFirstChildOfClass("Animator")
+    -- 6. Start Main Loops
+    Services.RunService.Heartbeat:Connect(function()
+        -- Refresh RootPart cache if needed (robustness)
+        if not Cache.RootPart or not Cache.RootPart.Parent then
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                Cache.RootPart = LocalPlayer.Character.HumanoidRootPart
+            else
+                return -- Can't run combat logic without a root part
             end
         end
         
-        -- Run combat logic
-        self:UpdateAnimParry()
+        -- Run all logic. No throttles.
         self:UpdateAimbot()
-        
-        -- Run visual updates
+        self:UpdateAutoDodge()
+        self:UpdateHitboxBlock()
+    end)
+    
+    Services.RunService.RenderStepped:Connect(function()
+        -- Visuals run on RenderStepped for smoothness
         self.Visuals:Update()
     end)
     
-    print("JJS Auto-Defense Core (v2.0) Initialized.")
+    print("JJS Auto-Defense Core (v4.0 - Hitbox Detection) Initialized.")
 end
 
 -- ===================================================================
--- ===== 14. EXECUTE
+-- ===== 12. EXECUTE
 -- ===================================================================
 JJS_Core:Init()
-
